@@ -3,20 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Webcam A4 Scanner → PDF (Scan-box + DPI + Zoom)</title>
+  <title>Webcam A4 Scanner → PDF (Scan-box + DPI + Zoom) — Fixed</title>
 
   <style>
     :root { --accent:#1e88e5; --bg:#0f1720; color-scheme: dark; }
     html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
     body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#071025 0%, #021226 100%);color:#e6eef8;padding:12px}
-    /* wider preview: larger left column */
     .card{width:1250px;max-width:98vw;background:rgba(10,14,20,0.58);border-radius:12px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,0.6);display:grid;grid-template-columns:1.6fr 360px;gap:18px}
     .left{display:flex;flex-direction:column;align-items:center;gap:12px}
-    /* larger preview area and taller aspect ratio for easier framing */
     .video-wrap{position:relative;background:#000;border-radius:8px;overflow:hidden;width:100%;height:78vh;max-height:980px;display:flex;align-items:center;justify-content:center}
     video{width:100%;height:100%;object-fit:cover;display:block}
     .overlay-count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;font-weight:700;font-size:88px;color:rgba(255,255,255,0.94);text-shadow:0 4px 18px rgba(0,0,0,0.7)}
-    /* Scan frame styles */
     .scan-frame{position:absolute;pointer-events:none;border:4px solid rgba(42,157,244,0.95);border-radius:6px;box-shadow:0 8px 24px rgba(10,50,80,0.6);box-sizing:border-box;transition:all 160ms ease;display:none}
     .scan-dim {position:absolute;left:8px;bottom:8px;padding:6px 10px;background:rgba(0,0,0,0.45);border-radius:6px;font-size:13px;color:#cfe3ff;pointer-events:none;}
     .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -38,7 +35,6 @@
     @media (max-width:900px){ .card{grid-template-columns:1fr;}}
     .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,0.12);border-top-color:var(--accent);border-radius:50%;animation:spin 0.85s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
-    /* zoom controls */
     .zoomWrap{display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:8px}
     .zoomVal{font-weight:700;color:#dbeafe}
   </style>
@@ -49,8 +45,6 @@
       <div class="video-wrap" aria-live="polite">
         <video id="video" autoplay playsinline></video>
         <div id="countdown" class="overlay-count" aria-hidden="true" style="display:none">5</div>
-
-        <!-- blue scan frame overlay -->
         <div id="scanFrame" class="scan-frame" aria-hidden="true">
           <div id="scanDim" class="scan-dim">A4</div>
         </div>
@@ -59,7 +53,6 @@
       <div class="controls" style="margin-top:8px">
         <div class="top-controls">
           <input id="filename" type="text" value="scanned-document" aria-label="Filename suggestion" />
-
           <label class="small">DPI:
             <select id="dpiSelect">
               <option value="300">300 (high)</option>
@@ -67,12 +60,11 @@
               <option value="600">600 (very high, heavy)</option>
             </select>
           </label>
-
           <label class="small"><input id="autoCrop" type="checkbox" checked /> Auto edge-detect + warp</label>
           <label class="small"><input id="showBox" type="checkbox" checked /> Show scan box</label>
           <label class="small"><input id="cropToBox" type="checkbox" checked /> Crop to box on capture</label>
 
-          <div class="zoomWrap" title="Zoom (try camera zoom if available)">
+          <div class="zoomWrap" title="Zoom (uses camera zoom when available)">
             <label class="small">Zoom:</label>
             <input id="zoomSlider" type="range" min="1" max="2" step="0.01" value="1" />
             <span class="zoomVal" id="zoomValue">1.00×</span>
@@ -142,7 +134,7 @@
     let captures = [];
     let cvReady = false;
 
-    // OpenCV initialize watcher
+    // OpenCV init
     if (window.cv && window.cv.onRuntimeInitialized) {
       window.cv['onRuntimeInitialized'] = () => { cvReady = true; opencvBadge.textContent = 'OpenCV: ready'; };
     } else {
@@ -165,7 +157,6 @@
     function logStatus(txt) { statusEl.textContent = 'Status: ' + txt; }
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-    // Detect camera zoom capability and configure slider accordingly
     async function detectZoomCapability(track){
       currentTrack = track;
       try {
@@ -180,7 +171,6 @@
           zoomFactor = Number(zoomSlider.value);
           zoomValue.textContent = zoomFactor.toFixed(2) + '×';
         } else {
-          // fallback: simulated zoom range 1..2
           hardwareZoomSupported = false;
           zoomSlider.min = 1;
           zoomSlider.max = 2;
@@ -197,7 +187,6 @@
       }
     }
 
-    // Apply hardware zoom if available otherwise update zoomFactor for simulated zoom
     async function applyZoom(value){
       zoomFactor = Number(value);
       zoomValue.textContent = zoomFactor.toFixed(2) + '×';
@@ -206,7 +195,7 @@
           await currentTrack.applyConstraints({ advanced: [{ zoom: zoomFactor }] });
         } catch (e) {
           console.warn('applyConstraints zoom failed', e);
-          hardwareZoomSupported = false; // fall back to simulated
+          hardwareZoomSupported = false;
         }
       }
     }
@@ -215,15 +204,26 @@
       applyZoom(e.target.value);
     });
 
+    // ensure video dimensions available before drawing - retry loop
+    async function ensureVideoReady(retries = 8, delay = 200) {
+      for (let i = 0; i < retries; i++) {
+        if (video.videoWidth && video.videoHeight) return true;
+        await sleep(delay);
+      }
+      return false;
+    }
+
     async function openCamera() {
       const constraints = { video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "environment" }, audio: false };
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
-      await video.play();
-      // detect hardware zoom on the active track
+      await video.play().catch(()=>{/* some browsers return promise rejection even though it plays */});
+      // wait a bit for dimensions
+      const ok = await ensureVideoReady();
+      if (!ok) console.warn('video dimensions not ready; continuing anyway');
       const track = stream.getVideoTracks()[0];
       await detectZoomCapability(track);
-      updateScanFrame(); // ensure overlay sized after play
+      updateScanFrame();
       return;
     }
 
@@ -266,36 +266,30 @@
     }
 
     function updateScanFrame() {
-      const A4_RATIO = 210 / 297; // ~0.707
+      const A4_RATIO = 210 / 297;
       const padding = 0.06;
       const vRect = video.getBoundingClientRect();
       if (vRect.width === 0 || vRect.height === 0) return;
       const maxWidth = vRect.width * (1 - padding * 2);
       const maxHeight = vRect.height * (1 - padding * 2);
-
       let frameWidth = maxWidth;
       let frameHeight = frameWidth / A4_RATIO;
       if (frameHeight > maxHeight) {
         frameHeight = maxHeight;
         frameWidth = frameHeight * A4_RATIO;
       }
-
       const left = vRect.left + (vRect.width - frameWidth) / 2 - video.parentElement.getBoundingClientRect().left;
       const top = vRect.top + (vRect.height - frameHeight) / 2 - video.parentElement.getBoundingClientRect().top;
-
-      const boxScaleVal = Number(document.getElementById('boxScale').value);
+      const boxScaleVal = Number(document.getElementById('boxScale')?.value || 1);
       const scaledW = frameWidth * boxScaleVal;
       const scaledH = frameHeight * boxScaleVal;
-      // center again
       const l2 = vRect.left + (vRect.width - scaledW) / 2 - video.parentElement.getBoundingClientRect().left;
       const t2 = vRect.top + (vRect.height - scaledH) / 2 - video.parentElement.getBoundingClientRect().top;
-
       scanFrame.style.width = Math.round(scaledW) + 'px';
       scanFrame.style.height = Math.round(scaledH) + 'px';
       scanFrame.style.left = Math.round(l2) + 'px';
       scanFrame.style.top = Math.round(t2) + 'px';
       scanFrame.style.display = showBoxCheckbox.checked ? 'block' : 'none';
-
       const dpi = Number(dpiSelect.value) || 400;
       const pxPerMm = dpi / 25.4;
       const approxWmm = Math.round(scaledW / pxPerMm);
@@ -303,14 +297,14 @@
       scanDim.textContent = `${approxWmm}×${approxHmm} mm`;
     }
 
-    // captureFrame now supports simulated zoom when hardware zoom not available.
     async function captureFrame(cropToBox = false) {
-      const vW = video.videoWidth;
-      const vH = video.videoHeight;
+      // ensure video dimensions available
+      await ensureVideoReady(6, 150);
+      const vW = video.videoWidth || 1280;
+      const vH = video.videoHeight || 720;
       const vRect = video.getBoundingClientRect();
 
-      // Determine source crop area based on zoomFactor.
-      // If hardware zoom supported and applied, the video frame already reflects zoom so treat source == full.
+      // simulated zoom source if hardware not available
       let srcX = 0, srcY = 0, srcW = vW, srcH = vH;
       if (!hardwareZoomSupported && zoomFactor > 1) {
         srcW = Math.round(vW / zoomFactor);
@@ -326,6 +320,7 @@
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
+        // draw the appropriate region of the video
         ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
         return canvas.toDataURL('image/jpeg', 0.95);
       }
@@ -346,7 +341,6 @@
       canvas.width = Math.round(sw);
       canvas.height = Math.round(sh);
       const ctx = canvas.getContext('2d');
-      // white background
       ctx.fillStyle = 'white';
       ctx.fillRect(0,0,canvas.width,canvas.height);
       ctx.imageSmoothingEnabled = true;
@@ -406,9 +400,8 @@
       return canvas.toDataURL('image/jpeg', 0.95);
     }
 
-    // Auto-detect and perspective warp (OpenCV.js) unchanged
     async function autoDetectAndWarp(dataURL, dpi) {
-      if (!cvReady) throw new Error('OpenCV not ready');
+      if (!cvReady) return null;
       const A4_MM = { w: 210, h: 297 };
       const pxPerMm = dpi / 25.4;
       const targetW = Math.round(A4_MM.w * pxPerMm);
@@ -497,17 +490,50 @@
     function clearThumbsPlaceholderIfNeeded() {
       if (thumbs.children.length === 1 && thumbs.children[0].innerText && thumbs.children[0].innerText.includes('No scans yet')) thumbs.innerHTML = '';
     }
-    function addThumbEntryImage(dataUrl) {
+
+    // safe thumbnail append - avoids broken question-mark images by setting onerror fallback
+    function addThumbSafe(dataUrl, idx) {
       clearThumbsPlaceholderIfNeeded();
-      const el = document.createElement('div');
-      el.className = 'thumb';
+      const el = document.createElement('div'); el.className = 'thumb';
       const img = document.createElement('img');
+      img.alt = `Scan ${idx}`;
+      // If the image fails to load, replace with a small white placeholder (or original)
+      img.onerror = function () {
+        console.warn('thumbnail load failed; using placeholder');
+        // tiny 1x1 white png as fallback
+        img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAE0lEQVR42mP8/5+hPQMIwMDAwAAAwABJ0WQswAAAABJRU5ErkJggg==';
+      };
       img.src = dataUrl;
       el.appendChild(img);
       thumbs.appendChild(el);
     }
 
-    // main sequence (5s timer)
+    // background processing for auto-detect - will not block capture loop
+    async function processEntryInBackground(entry, idx) {
+      if (!autoCropCheckbox.checked || !cvReady) {
+        entry.useProcessed = false;
+        return;
+      }
+      try {
+        const dpi = Number(dpiSelect.value) || 400;
+        const processed = await autoDetectAndWarp(entry.original, dpi);
+        if (processed) {
+          entry.processed = processed;
+          entry.useProcessed = true;
+          // update thumbnail to processed image if it exists
+          const imgs = thumbs.querySelectorAll('img');
+          const imgEl = imgs[idx]; // idx matched order of addition
+          if (imgEl) imgEl.src = processed;
+        } else {
+          entry.useProcessed = false;
+        }
+      } catch (e) {
+        console.error('Background processing failed', e);
+        entry.useProcessed = false;
+      }
+    }
+
+    // main sequence (5s timer) - robust and non-blocking processing
     startBtn.addEventListener('click', async function () {
       startBtn.disabled = true;
       try {
@@ -520,40 +546,58 @@
         startBtn.disabled = false;
         return;
       }
+
       logStatus('Camera ready. Starting sequence...');
       captures = []; thumbs.innerHTML = ''; thumbs.style.display = 'none';
+
       try {
         for (let i = 1; i <= 3; i++) {
           logStatus(`Preparing shot ${i}...`);
           updateScanFrame();
           await countdown(5);
-          const data = await captureFrame(cropToBoxCheckbox.checked);
+
+          // capture original (always immediate)
+          let data;
+          try {
+            data = await captureFrame(cropToBoxCheckbox.checked);
+          } catch (capErr) {
+            console.error('captureFrame failed', capErr);
+            // fallback: try again quickly once
+            await sleep(200);
+            data = await captureFrame(cropToBoxCheckbox.checked);
+          }
+
           const entry = { original: data, processed: null, useProcessed: false, processing: false };
           captures.push(entry);
-          addThumbEntryImage(data); thumbs.style.display = 'grid';
 
-          if (autoCropCheckbox.checked && cvReady) {
-            entry.processing = true;
-            // show spinner in the thumbnail tools area (simple approach: show temporary border change)
-            try {
-              const dpi = Number(dpiSelect.value);
-              const processed = await autoDetectAndWarp(entry.original, dpi);
-              entry.processed = processed || null;
-              entry.useProcessed = !!processed;
-              // replace last thumb image if processed exists
-              if (processed) {
-                const lastThumbImg = thumbs.querySelector('img:last-of-type');
-                if (lastThumbImg) lastThumbImg.src = processed;
-              }
-            } catch (e) { console.error('auto-process failed', e); }
-            finally { entry.processing = false; }
-          }
+          // add thumbnail immediately (safe)
+          addThumbSafe(data, captures.length - 1);
+          thumbs.style.display = 'grid';
+
+          // start background processing (do not await)
+          entry.processing = true;
+          processEntryInBackground(entry, captures.length - 1).finally(() => { entry.processing = false; });
+
           logStatus(`Captured scan ${i}`);
+          // short pause to keep rhythm
           if (i < 3) await sleep(500);
         }
 
         logStatus('All scans taken. Generating PDF...');
+        // stop camera before heavy processing/saving
         stopCamera();
+
+        // At this point some background processing may still be running.
+        // Wait a short time (up to 2s) for any quick background processed images to finish.
+        // But don't wait indefinitely — processed images are optional.
+        const maxWait = 2000;
+        const start = Date.now();
+        while (Date.now() - start < maxWait) {
+          const anyProcessing = captures.some(c => c.processing);
+          if (!anyProcessing) break;
+          await sleep(150);
+        }
+
         await createPDFFromDataURLs(captures, filenameInput.value);
         logStatus('PDF generated. Save dialog should appear.');
       } catch (err) {
@@ -577,8 +621,6 @@
     scanFrame.style.display = showBoxCheckbox.checked ? 'block' : 'none';
     updateScanFrame();
 
-    // expose logStatus to inner scope
-    function logStatus(txt) { statusEl.textContent = 'Status: ' + txt; }
   })();
   </script>
 </body>
