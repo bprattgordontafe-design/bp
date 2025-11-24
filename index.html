@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Fullscreen A4 Scanner — Single Button (iPad-friendly)</title>
+
+<style>
+  :root { --accent:#1e88e5; --bg:#071025; --card:rgba(10,14,20,0.6); color-scheme: dark; }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:var(--bg);color:#e6eef8}
+  /* immersive default (in-page fullscreen) */
+  body.immersive-mode {
+    background: #000;
+    overflow: hidden;
+  }
+  .app {
+    height:100vh;
+    width:100vw;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .video-wrap {
+    position:relative;
+    width:95vw;
+    height:90vh;
+    max-width:1400px;
+    max-height:1000px;
+    background:#000;
+    border-radius:12px;
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  video { width:100%; height:100%; object-fit:cover; display:block; }
+  /* scan overlay box */
+  .scan-frame {
+    position:absolute;
+    border:5px solid rgba(42,157,244,0.95);
+    border-radius:8px;
+    pointer-events:none;
+    box-shadow:0 12px 30px rgba(2,10,30,0.6);
+    box-sizing:border-box;
+  }
+  .scan-dim { position:absolute; left:12px; bottom:12px; background:rgba(0,0,0,0.45); padding:6px 10px; border-radius:8px; font-weight:700; color:#cff; font-size:14px; }
+  /* large central button */
+  .start-overlay {
+    position:absolute;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    flex-direction:column;
+    pointer-events:auto;
+  }
+  .bigBtn {
+    background:linear-gradient(180deg,var(--accent),#125ddc);
+    color:white;
+    border:0;
+    padding:20px 28px;
+    border-radius:14px;
+    font-size:20px;
+    font-weight:800;
+    box-shadow:0 14px 44px rgba(16,86,160,0.25);
+    cursor:pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .smallGear {
+    position:absolute;
+    right:14px;
+    top:14px;
+    background:rgba(0,0,0,0.35);
+    border:1px solid rgba(255,255,255,0.05);
+    padding:8px;
+    border-radius:10px;
+    cursor:pointer;
+    color:#cfe3ff;
+    font-weight:700;
+  }
+  .settingsPanel {
+    position:absolute;
+    left:12px;
+    top:12px;
+    background:rgba(2,6,23,0.85);
+    color:#dbeafe;
+    padding:10px;
+    border-radius:10px;
+    border:2px solid rgba(42,157,244,0.08);
+    font-size:14px;
+    display:none;
+    z-index:40;
+  }
+  label{display:inline-flex;align-items:center;gap:8px}
+  input[type=range]{vertical-align:middle}
+  /* toast */
+  .progress-toast { position:absolute; top:18px; right:18px; background:rgba(2,6,23,0.75); color:#e6f3ff; border:2px solid rgba(42,157,244,0.95); padding:10px 12px; border-radius:10px; font-weight:800; font-size:16px; box-shadow:0 10px 30px rgba(0,0,0,0.6); opacity:0; transform:translateY(-8px) scale(.98); transition:opacity .14s,transform .14s; pointer-events:none; z-index:60; }
+  .progress-toast.show { opacity:1; transform:none; }
+  /* thumbs strip (revealed under immersive after capture) */
+  .thumbs {
+    position:absolute;
+    right:12px;
+    bottom:12px;
+    max-width:240px;
+    display:flex;
+    gap:8px;
+    z-index:45;
+  }
+  .thumb { width:72px; height:96px; background:#081225; border-radius:8px; overflow:hidden; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.03); }
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  /* responsive */
+  @media (pointer:coarse), (max-width:1200px){
+    .bigBtn{padding:22px 30px; font-size:22px}
+    .video-wrap{width:100vw;height:100vh;border-radius:0}
+    .scan-dim{font-size:16px}
+    .progress-toast{font-size:18px;top:28px;right:28px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="video-wrap" id="videoWrap">
+    <video id="video" autoplay playsinline muted></video>
+
+    <div id="scanFrame" class="scan-frame" aria-hidden="true">
+      <div id="scanDim" class="scan-dim">A4</div>
+    </div>
+
+    <!-- central start overlay -->
+    <div class="start-overlay" id="startOverlay" aria-hidden="false">
+      <button id="startBtn" class="bigBtn">Start Fullscreen Scan</button>
+      <div style="font-size:13px;color:#cfe3ff;margin-top:6px">3 shots · 5s timer · high quality</div>
+    </div>
+
+    <!-- settings gear -->
+    <button class="smallGear" id="gearBtn" title="Settings">⚙</button>
+    <div class="settingsPanel" id="settingsPanel" role="dialog" aria-hidden="true">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label> DPI:
+          <select id="dpiSelect">
+            <option value="400">400 (default, sharp)</option>
+            <option value="300">300 (balanced)</option>
+            <option value="150">150 (faster)</option>
+          </select>
+        </label>
+        <label><input id="autoCrop" type="checkbox" checked /> Auto edge-detect + warp</label>
+        <label><input id="showBox" type="checkbox" checked /> Show A4 guide</label>
+        <label><input id="cropToBox" type="checkbox" checked /> Crop to guide on capture</label>
+        <label>Box size:
+          <input id="boxScale" type="range" min="0.5" max="1.0" step="0.02" value="0.88" />
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="closeSettings" style="padding:8px;color:#cfe3ff;background:transparent;border:1px solid rgba(255,255,255,0.04);border-radius:8px">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="progressToast" class="progress-toast" aria-live="polite" aria-hidden="true">Shot 1 of 3</div>
+
+    <div class="thumbs" id="thumbs" aria-hidden="true"></div>
+  </div>
+</div>
+
+<!-- libraries (CDN) -->
+<script src="https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script async src="https://docs.opencv.org/4.7.0/opencv.js"></script>
+
+<script>
+(async function(){
+  // Elements
+  const video = document.getElementById('video');
+  const videoWrap = document.getElementById('videoWrap');
+  const scanFrame = document.getElementById('scanFrame');
+  const scanDim = document.getElementById('scanDim');
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const gearBtn = document.getElementById('gearBtn');
+  const settingsPanel = document.getElementById('settingsPanel');
+  const closeSettings = document.getElementById('closeSettings');
+  const dpiSelect = document.getElementById('dpiSelect');
+  const autoCropCheckbox = document.getElementById('autoCrop');
+  const showBoxCheckbox = document.getElementById('showBox');
+  const cropToBoxCheckbox = document.getElementById('cropToBox');
+  const boxScale = document.getElementById('boxScale');
+  const progressToast = document.getElementById('progressToast');
+  const thumbs = document.getElementById('thumbs');
+
+  // default immersive on load (in-page fullscreen look)
+  document.body.classList.add('immersive-mode');
+
+  // track camera stream
+  let stream = null;
+  let currentTrack = null;
+  let cvReady = false;
+
+  // Wait for OpenCV or mark not ready after timeout
+  (function waitCv(){
+    let attempts = 0;
+    const max = 50;
+    const iv = setInterval(()=>{
+      attempts++;
+      if (window.cv && window.cv.Mat) {
+        cvReady = true;
+        clearInterval(iv);
+      } else if (attempts > max) {
+        cvReady = false;
+        clearInterval(iv);
+      }
+    }, 200);
+  })();
+
+  // small helpers
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  function logToast(text, show=true){
+    progressToast.textContent = text;
+    if (show) {
+      progressToast.classList.add('show');
+      progressToast.setAttribute('aria-hidden','false');
+    } else {
+      progressToast.classList.remove('show');
+      progressToast.setAttribute('aria-hidden','true');
+    }
+  }
+  function addThumb(dataUrl){
+    const el = document.createElement('div');
+    el.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    el.appendChild(img);
+    thumbs.appendChild(el);
+    thumbs.style.display = 'flex';
+    thumbs.setAttribute('aria-hidden','false');
+  }
+
+  // update scan box size & position to A4 aspect ratio inside video element
+  function updateScanFrame(){
+    const A4_RATIO = 210 / 297;
+    const padding = 0.04;
+    const vRect = video.getBoundingClientRect();
+    if (!vRect.width || !vRect.height) return;
+    let maxW = vRect.width * (1 - padding*2);
+    let maxH = vRect.height * (1 - padding*2);
+    let fw = maxW;
+    let fh = fw / A4_RATIO;
+    if (fh > maxH) { fh = maxH; fw = fh * A4_RATIO; }
+    const scale = parseFloat(boxScale.value) || 0.88;
+    fw *= scale; fh *= scale;
+    const left = vRect.left + (vRect.width - fw)/2 - videoWrap.getBoundingClientRect().left;
+    const top  = vRect.top  + (vRect.height - fh)/2 - videoWrap.getBoundingClientRect().top;
+    scanFrame.style.width = Math.round(fw) + 'px';
+    scanFrame.style.height = Math.round(fh) + 'px';
+    scanFrame.style.left = Math.round(left) + 'px';
+    scanFrame.style.top = Math.round(top) + 'px';
+    scanFrame.style.display = showBoxCheckbox.checked ? 'block' : 'none';
+
+    // show approximate mm for current DPI
+    const dpi = Number(dpiSelect.value) || 400;
+    const pxPerMm = dpi / 25.4;
+    scanDim.textContent = Math.round(fw/pxPerMm) + '×' + Math.round(fh/pxPerMm) + ' mm';
+  }
+
+  window.addEventListener('resize', updateScanFrame);
+  video.addEventListener('loadedmetadata', updateScanFrame);
+  video.addEventListener('play', updateScanFrame);
+  boxScale.addEventListener('input', updateScanFrame);
+  showBoxCheckbox.addEventListener('change', updateScanFrame);
+
+  // open camera (deferred until user clicks)
+  async function openCamera(){
+    const constraints = {
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 3840 },
+        height: { ideal: 2160 }
+      },
+      audio: false
+    };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    currentTrack = stream.getVideoTracks()[0];
+    updateScanFrame();
+  }
+
+  function stopCamera(){
+    try {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      currentTrack = null;
+      video.srcObject = null;
+    } catch(e){}
+  }
+
+  // capture frame; if cropToBox, map overlay to video pixels and crop
+  async function captureFrame(cropToBox){
+    const vW = video.videoWidth || 1280;
+    const vH = video.videoHeight || 720;
+    if (!cropToBox){
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(vW * dpr);
+      canvas.height = Math.round(vH * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.95);
+    }
+    // crop to the scanFrame mapping from CSS to video pixels
+    const vRect = video.getBoundingClientRect();
+    const fRect = scanFrame.getBoundingClientRect();
+    const sx = Math.max(0, (fRect.left - vRect.left) / vRect.width * vW);
+    const sy = Math.max(0, (fRect.top - vRect.top) / vRect.height * vH);
+    const sw = Math.max(1, (fRect.width / vRect.width) * vW);
+    const sh = Math.max(1, (fRect.height / vRect.height) * vH);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(sw * dpr);
+    canvas.height = Math.round(sh * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.95);
+  }
+
+  // simple fit to A4 canvas (cover) used before pdf generation
+  async function fitImageToA4(dataURL, dpi){
+    const A4_MM = { w:210, h:297 };
+    const pxPerMm = (dpi || 400) / 25.4;
+    const targetW = Math.round(A4_MM.w * pxPerMm);
+    const targetH = Math.round(A4_MM.h * pxPerMm);
+    const img = new Image(); img.src = dataURL; await new Promise(r=>img.onload=r);
+    let sw = img.naturalWidth, sh = img.naturalHeight;
+    let rotate = (sw > sh && targetH > targetW);
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW; canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    if (!rotate){
+      const scale = Math.max(targetW/sw, targetH/sh);
+      const dw = sw*scale, dh = sh*scale;
+      ctx.drawImage(img, (targetW-dw)/2, (targetH-dh)/2, dw, dh);
+    } else {
+      const tmp = document.createElement('canvas'); tmp.width = sh; tmp.height = sw;
+      const tctx = tmp.getContext('2d');
+      tctx.translate(tmp.width/2, tmp.height/2); tctx.rotate(90*Math.PI/180); tctx.drawImage(img, -sw/2, -sh/2);
+      const scale = Math.max(targetW/tmp.width, targetH/tmp.height);
+      const dw = tmp.width*scale, dh = tmp.height*scale;
+      ctx.drawImage(tmp, (targetW-dw)/2, (targetH-dh)/2, dw, dh);
+    }
+    return canvas.toDataURL('image/jpeg', 0.95);
+  }
+
+  // auto detect + warp using OpenCV; returns dataUrl or null if fails
+  async function autoDetectAndWarp(dataURL, dpi){
+    if (!cvReady) return null;
+    const A4_MM = { w:210, h:297 };
+    const pxPerMm = (dpi || 400) / 25.4;
+    const targetW = Math.round(A4_MM.w * pxPerMm);
+    const targetH = Math.round(A4_MM.h * pxPerMm);
+    const img = new Image(); img.src = dataURL; await new Promise(r=>img.onload=r);
+    const srcCanvas = document.createElement('canvas'); srcCanvas.width = img.naturalWidth; srcCanvas.height = img.naturalHeight;
+    srcCanvas.getContext('2d').drawImage(img, 0, 0);
+    let src = cv.imread(srcCanvas);
+    try {
+      let gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+      cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0,0, cv.BORDER_DEFAULT);
+      let edges = new cv.Mat(); cv.Canny(gray, edges, 50, 150, 3, false);
+      let contours = new cv.MatVector(); let hierarchy = new cv.Mat();
+      cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      let maxContour = null, maxArea = 0;
+      for (let i=0;i<contours.size();i++){
+        const cnt = contours.get(i);
+        const area = Math.abs(cv.contourArea(cnt));
+        if (area < 1000) { cnt.delete(); continue; }
+        let peri = cv.arcLength(cnt, true);
+        let approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+        if (approx.rows === 4 && area > maxArea) { maxArea = area; if (maxContour) maxContour.delete(); maxContour = approx; }
+        else approx.delete();
+        cnt.delete();
+      }
+      edges.delete(); hierarchy.delete(); gray.delete(); contours.delete();
+      if (!maxContour) { src.delete(); return null; }
+      const pts = [];
+      for (let i=0;i<4;i++) pts.push({ x: maxContour.data32S[i*2], y: maxContour.data32S[i*2+1] });
+      maxContour.delete();
+      function orderPoints(pts){
+        const sums = pts.map(p => p.x + p.y);
+        const diffs = pts.map(p => p.x - p.y);
+        const tl = pts[sums.indexOf(Math.min(...sums))];
+        const br = pts[sums.indexOf(Math.max(...sums))];
+        const tr = pts[diffs.indexOf(Math.min(...diffs))];
+        const bl = pts[diffs.indexOf(Math.max(...diffs))];
+        return [tl, tr, br, bl];
+      }
+      const ordered = orderPoints(pts);
+      const srcTri = cv.matFromArray(4,1,cv.CV_32FC2, [ordered[0].x,ordered[0].y, ordered[1].x,ordered[1].y, ordered[2].x,ordered[2].y, ordered[3].x,ordered[3].y]);
+      const dstTri = cv.matFromArray(4,1,cv.CV_32FC2, [0,0, targetW-1,0, targetW-1,targetH-1, 0,targetH-1]);
+      const M = cv.getPerspectiveTransform(srcTri, dstTri);
+      let dst = new cv.Mat();
+      const dsize = new cv.Size(targetW, targetH);
+      cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255,255,255,255));
+      const outCanvas = document.createElement('canvas'); outCanvas.width = targetW; outCanvas.height = targetH;
+      cv.imshow(outCanvas, dst);
+      srcTri.delete(); dstTri.delete(); M.delete(); dst.delete(); src.delete();
+      return outCanvas.toDataURL('image/jpeg', 0.95);
+    } catch(e){
+      try { src.delete(); } catch(e2){}
+      console.warn('autoDetect failure', e);
+      return null;
+    }
+  }
+
+  // create PDF with jsPDF; uses fitImageToA4 to guarantee page size & dpi
+  async function createPDF(images, suggestedFilename){
+    const { jsPDF } = window.jspdf;
+    const dpi = Number(dpiSelect.value) || 400;
+    const A4_MM = { w:210, h:297 };
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+    for (let i=0;i<images.length;i++){
+      const img = images[i];
+      const fitted = await fitImageToA4(img, dpi);
+      if (i>0) pdf.addPage('a4');
+      pdf.addImage(fitted, 'JPEG', 0, 0, A4_MM.w, A4_MM.h);
+    }
+    const filename = (suggestedFilename && suggestedFilename.trim()) ? suggestedFilename.trim() + '.pdf' : 'scanned-document.pdf';
+    pdf.save(filename);
+  }
+
+  // countdown 5s with visible overlay
+  const countdownOverlay = document.createElement('div');
+  countdownOverlay.style.position = 'absolute';
+  countdownOverlay.style.inset = '0';
+  countdownOverlay.style.display = 'flex';
+  countdownOverlay.style.alignItems = 'center';
+  countdownOverlay.style.justifyContent = 'center';
+  countdownOverlay.style.pointerEvents = 'none';
+  countdownOverlay.style.fontWeight = '900';
+  countdownOverlay.style.fontSize = '110px';
+  countdownOverlay.style.color = 'rgba(255,255,255,0.95)';
+  countdownOverlay.style.textShadow = '0 8px 28px rgba(0,0,0,0.6)';
+  countdownOverlay.style.zIndex = '55';
+  countdownOverlay.style.visibility = 'hidden';
+  videoWrap.appendChild(countdownOverlay);
+
+  async function showCountdown(seconds=5){
+    countdownOverlay.style.visibility = 'visible';
+    for (let s = seconds; s >= 1; s--){
+      countdownOverlay.textContent = s;
+      await sleep(1000);
+    }
+    // small cue
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = 1000; g.gain.value = 0.06; o.connect(g); g.connect(ctx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.15);
+      setTimeout(()=>{ o.stop(); ctx.close(); }, 190);
+    } catch(e){}
+    countdownOverlay.style.visibility = 'hidden';
+  }
+
+  // core single-button flow: opens camera, runs 3 shots, runs autocrop if selected, builds PDF
+  async function singleButtonFlow(){
+    startBtn.disabled = true;
+    gearBtn.disabled = true;
+    logToast('Preparing...', true);
+    try {
+      // open camera (user gesture already from click)
+      try {
+        await openCamera();
+      } catch(e){
+        alert('Camera access failed. Make sure you allowed permission and page is HTTPS/localhost.');
+        throw e;
+      }
+      // hide the start overlay so students see bigger preview (but keep the scan box)
+      startOverlay.style.display = 'none';
+
+      // prepare containers
+      const collected = [];
+      thumbs.innerHTML = '';
+
+      for (let i=1;i<=3;i++){
+        logToast(`Shot ${i} of 3`, true);
+        // tiny pause so toast appears
+        await sleep(250);
+        await showCountdown(5); // 5 second timer
+        const data = await captureFrame(cropToBoxCheckbox.checked);
+        collected.push({ original: data, processed: null, used: null });
+        addThumb(data);
+        // run auto-detect in background (if enabled)
+        if (autoCropCheckbox.checked && cvReady){
+          try {
+            const processed = await autoDetectAndWarp(data, Number(dpiSelect.value||400));
+            if (processed) { collected[collected.length-1].processed = processed; collected[collected.length-1].used = processed; }
+            else { collected[collected.length-1].used = data; }
+          } catch(e){
+            collected[collected.length-1].used = data;
+          }
+        } else {
+          collected[collected.length-1].used = data;
+        }
+        logToast(`Captured ${i} of 3`, true);
+        await sleep(350);
+      }
+
+      logToast('Rendering PDF...', true);
+
+      // prepare image array (prefer processed if exists)
+      const imagesForPdf = collected.map(c => (c.processed ? c.processed : c.original));
+      await createPDF(imagesForPdf, 'scanned-document');
+
+      logToast('Done — PDF saved', true);
+      await sleep(600);
+      logToast('', false);
+
+    } catch(e){
+      console.error('flow error', e);
+      logToast('', false);
+      alert('Scanning failed: ' + (e && e.message ? e.message : String(e)));
+    } finally {
+      // restore UI so teacher can start another scan easily
+      startOverlay.style.display = 'flex';
+      stopCamera();
+      startBtn.disabled = false;
+      gearBtn.disabled = false;
+    }
+  }
+
+  // UI wiring
+  gearBtn.addEventListener('click', ()=> {
+    const open = settingsPanel.style.display === 'block';
+    settingsPanel.style.display = open ? 'none' : 'block';
+    settingsPanel.setAttribute('aria-hidden', open ? 'true' : 'false');
+  });
+  closeSettings.addEventListener('click', ()=> { settingsPanel.style.display = 'none'; settingsPanel.setAttribute('aria-hidden','true'); });
+
+  startBtn.addEventListener('click', async (ev) => {
+    // single big button does everything
+    await singleButtonFlow();
+  });
+
+  // small helpers for accessibility
+  function prepareInitialUI(){
+    // ensure scan frame matches initial layout
+    updateScanFrame();
+    // ensure thumbs hidden initially
+    thumbs.style.display = 'none';
+  }
+  prepareInitialUI();
+
+  // If user toggles showBox or DPI, update frame
+  dpiSelect.addEventListener('change', updateScanFrame);
+  showBoxCheckbox.addEventListener('change', updateScanFrame);
+  boxScale.addEventListener('input', updateScanFrame);
+
+  // make sure video playback errors don't freeze UI
+  video.addEventListener('error', (e)=> {
+    console.warn('video error', e);
+  });
+
+  // Note: do not auto-request fullscreen via browser API (caused crashes on some iPads).
+  // We use an in-page immersive mode (CSS) which reliably fills the viewport and keeps camera active.
+
+})();
+</script>
+</body>
+</html>
